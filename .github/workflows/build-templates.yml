@@ -22,6 +22,7 @@ on:
         required: true
         default: 4.6-stable
 
+      # Web only
       threads:
         description: "Web only: build with threads?"
         required: true
@@ -36,6 +37,7 @@ on:
         required: true
         default: 4.0.6
 
+      # macOS only
       macos_target:
         description: "macOS only: which template to build"
         required: true
@@ -49,6 +51,7 @@ jobs:
   build-web:
     if: ${{ inputs.platform == 'web' }}
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout this repository (profiles)
         uses: actions/checkout@v4
@@ -79,7 +82,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 python3-pip scons cmake ninja-build pkg-config
+          sudo apt-get install -y python3 python3-pip scons cmake ninja-build pkg-config brotli zip
 
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
@@ -92,6 +95,7 @@ jobs:
           emcc -v
           python3 --version
           scons --version
+          brotli --version
 
       - name: Patch gdbuild (remove Mutex/Time/Window if disabled)
         shell: bash
@@ -128,15 +132,43 @@ jobs:
           echo "== bin contents =="
           ls -la bin
 
+      - name: Rename web template zip (stable name)
+        working-directory: godot
+        shell: bash
+        run: |
+          cd bin
+          # Find the produced template zip (name differs slightly across versions)
+          ZIP="$(ls -1 *.zip 2>/dev/null | head -n 1 || true)"
+          if [ -z "$ZIP" ]; then
+            echo "No .zip produced in godot/bin. Contents:"
+            ls -la
+            exit 1
+          fi
+          cp "$ZIP" "web_template.zip"
+          echo "Using template zip: $ZIP -> web_template.zip"
+          ls -la web_template.zip
+
+      - name: Pre-compress template zip with Brotli (optional)
+        working-directory: godot
+        shell: bash
+        run: |
+          cd bin
+          brotli -f -q 11 web_template.zip
+          ls -la web_template.zip web_template.zip.br
+
       - name: Upload web artifacts
         uses: actions/upload-artifact@v4
         with:
           name: godot-${{ inputs.godot_ref }}-web-${{ inputs.threads }}-${{ env.PROFILE_SLUG }}
-          path: godot/bin/*.zip
+          path: |
+            godot/bin/web_template.zip
+            godot/bin/web_template.zip.br
+            godot/bin/*.zip
 
   build-macos:
     if: ${{ inputs.platform == 'macos' }}
     runs-on: macos-latest
+
     steps:
       - name: Checkout this repository (profiles)
         uses: actions/checkout@v4
@@ -197,6 +229,7 @@ jobs:
             print("No disabled_classes list found; no patch needed.")
           PY
 
+      # arm64 only: produce raw binaries then pack into a zip so upload always works
       - name: Build macOS templates (arm64 only)
         if: ${{ inputs.macos_target == 'arm64' }}
         working-directory: godot
@@ -213,11 +246,21 @@ jobs:
           echo "== bin contents =="
           ls -la bin
 
+          # Pack into a stable zip so we can upload and download easily
+          cd bin
+          mkdir -p macos_arm64
+          cp godot.macos.template_debug.arm64   macos_arm64/ || true
+          cp godot.macos.template_release.arm64 macos_arm64/ || true
+          zip -r9 godot_macos_arm64_templates.zip macos_arm64
+          ls -la godot_macos_arm64_templates.zip
+
+      # universal: create godot_macos.zip via generate_bundle=yes
       - name: Build macOS templates (universal)
         if: ${{ inputs.macos_target == 'universal' }}
         working-directory: godot
         shell: bash
         run: |
+          # arm64
           scons -j2 platform=macos target=template_debug arch=arm64 \
             optimize=size_extra lto=full \
             build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
@@ -226,10 +269,12 @@ jobs:
             optimize=size_extra lto=full \
             build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
 
+          # x86_64
           scons -j2 platform=macos target=template_debug arch=x86_64 \
             optimize=size_extra lto=full \
             build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
 
+          # bundle/universal zip
           scons -j2 platform=macos target=template_release arch=x86_64 generate_bundle=yes \
             optimize=size_extra lto=full \
             build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
@@ -237,8 +282,16 @@ jobs:
           echo "== bin contents =="
           ls -la bin
 
+          # Ensure there is at least one zip to upload; if name differs, keep all zips anyway
+          test -f bin/godot_macos.zip || echo "Note: bin/godot_macos.zip not found (name may differ)."
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: godot-${{ inputs.godot_ref }}-macos-${{ inputs.macos_target }}-${{ env.PROFILE_SLUG }}
-          path: godot/bin/*.zip
+          path: |
+            godot/bin/godot_macos.zip
+            godot/bin/godot_macos_arm64_templates.zip
+            godot/bin/*.zip
+            godot/bin/godot.macos.template_*
+          if-no-files-found: warn
