@@ -1,37 +1,44 @@
-name: Build Godot Web Templates (custom gdbuild)
+name: Build Godot Web Templates (choose profile)
 
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: "Which .gdbuild to use (path inside repo)"
+        required: true
+        default: "build/profiles/web2d_1.gdbuild"
+      godot_ref:
+        description: "Godot branch/tag (e.g. 4.6-stable)"
+        required: true
+        default: "4.6-stable"
+      threads:
+        description: "Build with threads? (yes/no)"
+        required: true
+        default: "yes"
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) Забираем ТВОЙ репозиторий (где лежит .gdbuild)
       - name: Checkout this repository
         uses: actions/checkout@v4
 
-      # 2) Забираем исходники Godot 4.6-stable в папку ./godot
       - name: Checkout Godot source
         uses: actions/checkout@v4
         with:
           repository: godotengine/godot
-          ref: 4.6-stable
+          ref: ${{ inputs.godot_ref }}
           path: godot
 
-      # 3) Ставим зависимости для сборки (SCons и прочее)
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 python3-pip scons cmake ninja-build pkg-config
 
-      # 4) Ставим Emscripten (нужен для Web/WASM)
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          # Godot docs требуют Emscripten 4.0.0+.
-          # Можно поменять на 4.0.6/4.0.7, если захочешь закрепиться на 4.x.
           version: 4.0.6
 
       - name: Verify toolchain
@@ -40,34 +47,22 @@ jobs:
           python3 --version
           scons --version
 
-      # 5) Собираем TEMPLATE RELEASE (основной)
-      - name: Build web template_release (threads)
+      - name: Build web template_release
         working-directory: godot
         run: |
+          EXTRA=""
+          if [ "${{ inputs.threads }}" = "no" ]; then EXTRA="threads=no"; fi
+
           scons -j2 platform=web target=template_release \
             optimize=size_extra lto=full \
-            build_profile="${GITHUB_WORKSPACE}/build/profiles/web2d_1.gdbuild"
-
-          # Переименуем для удобства
-          ls -la bin
-          mv bin/godot.web.template_release.wasm32.zip bin/web_release.zip
-
-      # 6) (Опционально) Собираем nothreads-версию (иногда проще деплоить)
-      - name: Build web template_release (nothreads)
-        working-directory: godot
-        run: |
-          scons -j2 platform=web target=template_release threads=no \
-            optimize=size_extra lto=full \
-            build_profile="${GITHUB_WORKSPACE}/build/profiles/web2d_1.gdbuild"
+            $EXTRA \
+            build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
 
           ls -la bin
-          # Имя файла может отличаться в зависимости от версии, поэтому:
-          # просто упакуем все zip из bin в артефакт, а нужный выберешь при скачивании.
-
-      # 7) Загружаем результат в Artifacts (можно скачать после завершения)
+          # Названия zip могут чуть различаться; проще загрузить все zip из bin.
+      
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: godot-web-templates
-          path: |
-            godot/bin/*.zip
+          name: godot-web-templates-${{ inputs.profile }}
+          path: godot/bin/*.zip
