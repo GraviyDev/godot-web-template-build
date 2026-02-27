@@ -7,13 +7,11 @@ on:
         description: "Target platform: web or macos"
         required: true
         type: choice
-        options:
-          - web
-          - macos
+        options: [web, macos]
         default: web
 
       profile:
-        description: "Path to .gdbuild inside THIS repo (e.g. build/profiles/web_min.gdbuild)"
+        description: "Path to .gdbuild inside this repo (e.g. build/profiles/web_min.gdbuild)"
         required: true
         default: "build/profiles/web2d_1.gdbuild"
 
@@ -22,19 +20,26 @@ on:
         required: true
         default: "4.6-stable"
 
+      # WEB
       threads:
         description: "Web only: build with threads? (yes/no)"
         required: true
         type: choice
-        options:
-          - yes
-          - no
+        options: [yes, no]
         default: yes
 
       emscripten_version:
         description: "Web only: Emscripten version (4.x recommended)"
         required: true
         default: "4.0.6"
+
+      # macOS
+      macos_target:
+        description: "macOS only: which template to build"
+        required: true
+        type: choice
+        options: [arm64, universal]
+        default: universal
 
 jobs:
   build-web:
@@ -49,6 +54,15 @@ jobs:
         run: |
           test -f "${{ inputs.profile }}" || (echo "Profile not found: ${{ inputs.profile }}" && exit 1)
           echo "Using profile: ${{ inputs.profile }}"
+
+      - name: Compute profile slug (safe artifact name)
+        shell: bash
+        run: |
+          PROFILE_FILE="${{ inputs.profile }}"
+          PROFILE_BASE="$(basename "$PROFILE_FILE" .gdbuild)"
+          PROFILE_SLUG="$(echo "$PROFILE_BASE" | tr -cs 'A-Za-z0-9._-' '_' )"
+          echo "PROFILE_SLUG=$PROFILE_SLUG" >> "$GITHUB_ENV"
+          echo "PROFILE_SLUG=$PROFILE_SLUG"
 
       - name: Checkout Godot source
         uses: actions/checkout@v4
@@ -73,80 +87,7 @@ jobs:
           python3 --version
           scons --version
 
-      # Опционально: автоматическая починка профиля от известной проблемы с Mutex/Time/Window
-      - name: Patch gdbuild (remove Mutex/Time/Window if disabled)
-        run: |
-          python3 - << 'PY'
-          import json, pathlib, sys
-          p = pathlib.Path("${{ inputs.profile }}")
-          data = json.loads(p.read_text(encoding="utf-8"))
-          bad = {"Mutex", "Time", "Window"}
-          changed = False
-          if isinstance(data.get("disabled_classes"), list):
-            before = list(data["disabled_classes"])
-            data["disabled_classes"] = [c for c in before if c not in bad]
-            changed = (before != data["disabled_classes"])
-          if changed:
-            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            print("Patched disabled_classes:", bad)
-          else:
-            print("No patch needed.")
-          PY
-
-      - name: Build web template_release
-        working-directory: godot
-        run: |
-          EXTRA=""
-          if [ "${{ inputs.threads }}" = "no" ]; then EXTRA="threads=no"; fi
-
-          scons -j2 platform=web target=template_release \
-            optimize=size_extra lto=full \
-            $EXTRA \
-            build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
-
-          echo "== bin contents =="
-          ls -la bin
-
-      - name: Upload web artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: godot-${{ inputs.godot_ref }}-web-${{ inputs.threads }}-$(basename "${{ inputs.profile }}" .gdbuild)
-          path: |
-            godot/bin/*.zip
-
-
-  build-macos:
-    if: ${{ inputs.platform == 'macos' }}
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout this repository (profiles)
-        uses: actions/checkout@v4
-
-      - name: Check profile exists
-        run: |
-          test -f "${{ inputs.profile }}" || (echo "Profile not found: ${{ inputs.profile }}" && exit 1)
-          echo "Using profile: ${{ inputs.profile }}"
-
-      - name: Checkout Godot source
-        uses: actions/checkout@v4
-        with:
-          repository: godotengine/godot
-          ref: ${{ inputs.godot_ref }}
-          path: godot
-
-      - name: Install SCons
-        run: |
-          brew update
-          brew install scons
-
-      - name: Verify tools
-        run: |
-          python3 --version
-          scons --version
-          xcodebuild -version
-
-      # Опционально: та же "починка" профиля
+      # Fix for known gdbuild issue: disabling Mutex/Time/Window breaks compilation
       - name: Patch gdbuild (remove Mutex/Time/Window if disabled)
         run: |
           python3 - << 'PY'
@@ -166,9 +107,92 @@ jobs:
             print("No patch needed.")
           PY
 
-      # В доках Godot для macOS templates: собираем arm64 и x86_64, а на последней команде generate_bundle=yes
-      - name: Build macOS templates (arm64)
+      - name: Build web template_release
         working-directory: godot
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ "${{ inputs.threads }}" = "no" ]; then EXTRA="threads=no"; fi
+
+          scons -j2 platform=web target=template_release \
+            optimize=size_extra lto=full \
+            $EXTRA \
+            build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
+
+          echo "== bin contents =="
+          ls -la bin
+
+      - name: Upload web artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-${{ inputs.godot_ref }}-web-${{ inputs.threads }}-${{ env.PROFILE_SLUG }}
+          path: |
+            godot/bin/*.zip
+
+  build-macos:
+    if: ${{ inputs.platform == 'macos' }}
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout this repository (profiles)
+        uses: actions/checkout@v4
+
+      - name: Check profile exists
+        run: |
+          test -f "${{ inputs.profile }}" || (echo "Profile not found: ${{ inputs.profile }}" && exit 1)
+          echo "Using profile: ${{ inputs.profile }}"
+          echo "macos_target: ${{ inputs.macos_target }}"
+
+      - name: Compute profile slug (safe artifact name)
+        shell: bash
+        run: |
+          PROFILE_FILE="${{ inputs.profile }}"
+          PROFILE_BASE="$(basename "$PROFILE_FILE" .gdbuild)"
+          PROFILE_SLUG="$(echo "$PROFILE_BASE" | tr -cs 'A-Za-z0-9._-' '_' )"
+          echo "PROFILE_SLUG=$PROFILE_SLUG" >> "$GITHUB_ENV"
+          echo "PROFILE_SLUG=$PROFILE_SLUG"
+
+      - name: Checkout Godot source
+        uses: actions/checkout@v4
+        with:
+          repository: godotengine/godot
+          ref: ${{ inputs.godot_ref }}
+          path: godot
+
+      - name: Install SCons
+        run: |
+          brew update
+          brew install scons
+
+      - name: Verify tools
+        run: |
+          python3 --version
+          scons --version
+          xcodebuild -version
+
+      - name: Patch gdbuild (remove Mutex/Time/Window if disabled)
+        run: |
+          python3 - << 'PY'
+          import json, pathlib
+          p = pathlib.Path("${{ inputs.profile }}")
+          data = json.loads(p.read_text(encoding="utf-8"))
+          bad = {"Mutex", "Time", "Window"}
+          changed = False
+          if isinstance(data.get("disabled_classes"), list):
+            before = list(data["disabled_classes"])
+            data["disabled_classes"] = [c for c in before if c not in bad]
+            changed = (before != data["disabled_classes"])
+          if changed:
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            print("Patched disabled_classes:", bad)
+          else:
+            print("No patch needed.")
+          PY
+
+      - name: Build macOS templates (arm64 only)
+        if: ${{ inputs.macos_target == 'arm64' }}
+        working-directory: godot
+        shell: bash
         run: |
           scons -j2 platform=macos target=template_debug   arch=arm64 \
             optimize=size_extra lto=full \
@@ -178,13 +202,29 @@ jobs:
             optimize=size_extra lto=full \
             build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
 
-      - name: Build macOS templates (x86_64 + bundle)
+          echo "== bin contents =="
+          ls -la bin
+
+      - name: Build macOS templates (universal: arm64 + x86_64 + bundle)
+        if: ${{ inputs.macos_target == 'universal' }}
         working-directory: godot
+        shell: bash
         run: |
+          # arm64
+          scons -j2 platform=macos target=template_debug   arch=arm64 \
+            optimize=size_extra lto=full \
+            build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
+
+          scons -j2 platform=macos target=template_release arch=arm64 \
+            optimize=size_extra lto=full \
+            build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
+
+          # x86_64
           scons -j2 platform=macos target=template_debug   arch=x86_64 \
             optimize=size_extra lto=full \
             build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
 
+          # bundle/universal zip
           scons -j2 platform=macos target=template_release arch=x86_64 generate_bundle=yes \
             optimize=size_extra lto=full \
             build_profile="${GITHUB_WORKSPACE}/${{ inputs.profile }}"
@@ -195,7 +235,6 @@ jobs:
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: godot-${{ inputs.godot_ref }}-macos-universal-$(basename "${{ inputs.profile }}" .gdbuild)
+          name: godot-${{ inputs.godot_ref }}-macos-${{ inputs.macos_target }}-${{ env.PROFILE_SLUG }}
           path: |
             godot/bin/*.zip
-            godot/bin/godot_macos.zip
