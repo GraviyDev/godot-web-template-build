@@ -113,7 +113,6 @@
 		"GLTFTextureSampler",
 		"GPUParticles2D",
 		"Geometry2D",
-		"Geometry3D",
 		"GodotInstance",
 		"Gradient",
 		"GradientTexture1D",
