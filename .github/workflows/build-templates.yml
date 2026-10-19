@@ -18,9 +18,9 @@ on:
         default: build/profiles/web2d_1.gdbuild
 
       godot_ref:
-        description: "Godot branch/tag/commit (e.g. 4.6-stable)"
+        description: "Godot branch/tag/commit (e.g. 4.7-stable)"
         required: true
-        default: 4.6-stable
+        default: 4.7-stable
 
       # Web only
       threads:
@@ -30,7 +30,7 @@ on:
         options:
           - yes
           - no
-        default: yes
+        default: no
 
       emscripten_version:
         description: "Web only: Emscripten version (4.x recommended)"
