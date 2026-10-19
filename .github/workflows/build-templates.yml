@@ -148,13 +148,7 @@ jobs:
           echo "Using template zip: $ZIP -> web_template.zip"
           ls -la web_template.zip
 
-      - name: Pre-compress template zip with Brotli (optional)
-        working-directory: godot
-        shell: bash
-        run: |
-          cd bin
-          brotli -f -q 11 web_template.zip
-          ls -la web_template.zip web_template.zip.br
+
 
       - name: Upload web artifacts
         uses: actions/upload-artifact@v4
@@ -162,7 +156,6 @@ jobs:
           name: godot-${{ inputs.godot_ref }}-web-${{ inputs.threads }}-${{ env.PROFILE_SLUG }}
           path: |
             godot/bin/web_template.zip
-            godot/bin/web_template.zip.br
             godot/bin/*.zip
 
   build-macos:
